@@ -28,128 +28,160 @@
   LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
   OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
- 
-var Thingy = require('../index');
-var util = require('util');
-var firebase = require('firebase');
-var thingy_id;
 
-var firebase_login = {
-    email : <Email>,
-    pass : <Password>
-};
+// Firebase v9+ modular SDK.
+// Credentials come from environment variables — copy .env.example → .env.
 
-var firebase_config = {
-  apiKey: <API KEY>,
-  authDomain: "<ID>.firebaseapp.com",
-  databaseURL: "https://<ID>.firebaseio.com",
-  storageBucket: "<ID>.appspot.com",
-};
+const Thingy = require("../index");
+const { GasMode } = require("../index");
+const { parseArgs } = require("node:util");
 
-var database;
-var this_thingy;
-var sigint = false;
-var current_temp = 0;
+const { initializeApp } = require("firebase/app");
+const { getDatabase, ref, set } = require("firebase/database");
+const {
+  getAuth,
+  signInWithEmailAndPassword,
+  signOut,
+} = require("firebase/auth");
 
-process.on('SIGINT', function () {
-    sigint = true;
-    console.log('Firebase signing out :');
-    firebase.auth().signOut().then(function() {
-        console.log('Firebase signed out!');
-    }).catch(function(error) {
-        console.log('Firebase sign out failed: ' + error.code + ' -' + error.message);
-    });
+// ─── Required environment variables ──────────────────────────────────────────
+const required = [
+  "FIREBASE_API_KEY",
+  "FIREBASE_AUTH_DOMAIN",
+  "FIREBASE_DATABASE_URL",
+  "FIREBASE_STORAGE_BUCKET",
+  "FIREBASE_EMAIL",
+  "FIREBASE_PASSWORD",
+];
+const missing = required.filter((k) => !process.env[k]);
+if (missing.length) {
+  console.error("Missing env vars:", missing.join(", "));
+  console.error(
+    "Copy .env.example → .env and fill in values, then: source .env",
+  );
+  process.exit(1);
+}
 
-    this_thingy.gas_disable(function(error) {
-        console.log('Gas sensor stopped! ' + ((error) ? error : ''));
-        this_thingy.disconnect(function(error){
-            console.log('Disconnected: ' + ((error) ? error : ''));
-            process.exit(1);
-        });
-    });
+// ─── Firebase singletons ─────────────────────────────────────────────────────
+const app = initializeApp({
+  apiKey: process.env.FIREBASE_API_KEY,
+  authDomain: process.env.FIREBASE_AUTH_DOMAIN,
+  databaseURL: process.env.FIREBASE_DATABASE_URL,
+  storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
+});
+const db = getDatabase(app);
+const auth = getAuth(app);
+
+// ─── CLI arguments ────────────────────────────────────────────────────────────
+const { values: cliArgs } = parseArgs({
+  options: { address: { type: "string", short: "a" } },
+  strict: false,
+});
+let thingyId = cliArgs.address || null;
+
+// ─── State ────────────────────────────────────────────────────────────────────
+let thisThingy = null;
+let sigint = false;
+
+// ─── SIGINT handler ───────────────────────────────────────────────────────────
+process.on("SIGINT", function () {
+  sigint = true;
+  console.log("Signing out of Firebase...");
+  signOut(auth)
+    .then(() => console.log("Firebase signed out!"))
+    .catch((err) => console.error("Sign out failed:", err.message));
+
+  if (thisThingy) {
+    // Disabling the streams unblocks the for-await loops in runSession(),
+    // which causes the while loop to exit via the sigint check.
+    Promise.all([
+      thisThingy.environment.gas.disable(),
+      thisThingy.environment.temperature.disable(),
+    ])
+      .catch(() => {})
+      .then(() => {
+        thisThingy.disconnect(() => process.exit(0));
+      });
+  } else {
+    process.exit(0);
+  }
 });
 
-function firebaseWriteGasData(gas, temperature) {
-    var date  = new Date()
-    var ISOString = date.toISOString();
-    var timestamp = ISOString.split('T')[0] + '/' + ISOString.split('T')[1].split('Z')[0].replace('.', '_');
-    console.log(timestamp);
-    firebase.database().ref('thingy/' + thingy_id + '/' + timestamp).set({
-        eco2: gas.eco2,
-        tvoc: gas.tvoc,
-        temp: temperature
-    });
+// ─── Firebase write ───────────────────────────────────────────────────────────
+async function firebaseWriteGasData(gas, temperature) {
+  const now = new Date().toISOString();
+  // "2026-08-17/14_30_00.000" — safe as a Firebase key
+  const path =
+    now.split("T")[0] + "/" + now.split("T")[1].split("Z")[0].replace(".", "_");
+  console.log(path);
+  await set(ref(db, `thingy/${thingyId}/${path}`), {
+    eco2: gas.eco2,
+    tvoc: gas.tvoc,
+    temp: temperature,
+  });
 }
 
-function onGasSensorData(gas) {
-    console.log('Gas sensor: eCO2 ' + gas.eco2 + ' - TVOC ' + gas.tvoc )
-    firebaseWriteGasData(gas, current_temp);
-}
+// ─── BLE session ─────────────────────────────────────────────────────────────
+async function runSession(thingy) {
+  await thingy.connect();
+  console.log("Connected!");
 
-function onTemperatureData(temperature) {
-    current_temp = temperature;
-}
+  // Single atomic BLE write for both config fields.
+  await thingy.environment.configure((cfg) => {
+    cfg.gasMode = GasMode.EVERY_60S;
+    cfg.temperatureInterval = 5000;
+  });
+  console.log("Environment configured!");
 
-function connectAndEnableGas(thingy) {
-    thingy_id = thingy.id;
-    this_thingy = thingy;
-    thingy.connectAndSetUp(function(error) {
-        console.log('Connected! ' + ((error) ? error : ''));
-        thingy.gas_mode_set(3, function(error) {
-            console.log('Gas sensor configured! ' + ((error) ? error : ''));
-        });
-        thingy.temperature_interval_set(5000, function(error) {
-            if (error) {
-                console.log('Temperature sensor configure! ' + error);
-            }
-        });
-        thingy.gas_enable(function(error) {
-            console.log('Gas sensor started! ' + ((error) ? error : ''));
-        });
-        thingy.temperature_enable(function(error) {
-            console.log('Temperature sensor started! ' + ((error) ? error : ''));
-        });
-    });
-}
+  await thingy.environment.gas.enable();
+  await thingy.environment.temperature.enable();
 
-function onDiscover(thingy) {
-    console.log('Discovered: ' + thingy);
+  let currentTemp = 0;
 
-    thingy.on('disconnect', function() {
-        if (!sigint) {
-            console.log('Disconnected! Trying to reconnect');
-            connectAndEnableGas(this);
-        }
-    });
-    thingy.on('gasNotif', onGasSensorData);
-    thingy.on('temperatureNotif', onTemperatureData);
-    connectAndEnableGas(thingy);
-}
-
-console.log('Firebase Thingy gas sensor!');
-
-process.argv.forEach(function(val, index, array){
-    if (val == '-a') {
-        if (process.argv[index + 1]) {
-            thingy_id = process.argv[index + 1];
-        }
+  // Temperature stream runs in the background and populates currentTemp.
+  const tempTask = (async () => {
+    for await (const temp of thingy.environment.temperature) {
+      currentTemp = temp;
     }
+  })();
+
+  // Gas stream drives the main loop; exits on disconnect or SIGINT.
+  for await (const gas of thingy.environment.gas) {
+    if (sigint) break;
+    console.log(`Gas: eCO₂ ${gas.eco2} ppm  TVOC ${gas.tvoc} ppb`);
+    firebaseWriteGasData(gas, currentTemp).catch(console.error);
+  }
+
+  await tempTask; // ensure background task cleans up
+}
+
+// ─── Discover & reconnect loop ────────────────────────────────────────────────
+Thingy.discover(async function (thingy) {
+  thingyId = thingyId || thingy.id;
+  thisThingy = thingy;
+
+  while (!sigint) {
+    try {
+      await runSession(thingy);
+    } catch (err) {
+      if (sigint) break;
+      console.error("Session error:", err.message);
+    }
+    if (!sigint) {
+      console.log("Disconnected! Reconnecting in 2 s...");
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+  }
 });
 
-firebase.initializeApp(firebase_config);
-
-console.log('Firebase signing in as: ' + firebase_login.email);
-firebase.auth().signInWithEmailAndPassword(firebase_login.email, firebase_login.pass).catch(function(error) {
-    // Handle Errors here.
-    console.log('Firebase sign in failed: ' + error.code + ' -' + error.message);
+// ─── Start ────────────────────────────────────────────────────────────────────
+console.log("Firebase Thingy gas sensor!");
+console.log("Signing in as:", process.env.FIREBASE_EMAIL);
+signInWithEmailAndPassword(
+  auth,
+  process.env.FIREBASE_EMAIL,
+  process.env.FIREBASE_PASSWORD,
+).catch((err) => {
+  console.error("Firebase sign-in failed:", err.code, "-", err.message);
+  process.exit(1);
 });
-
-// Get a reference to the database service
-database = firebase.database();
-
-if (!thingy_id) {
-    Thingy.discover(onDiscover);
-}
-else {
-    Thingy.discoverById(thingy_id, onDiscover);
-}

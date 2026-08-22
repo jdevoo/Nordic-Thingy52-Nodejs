@@ -28,30 +28,36 @@
   LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
   OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
- 
-var Thingy = require('../index');
-console.log('Thingy:52 LED!');
 
-function onDiscover(thingy) {
-  console.log('Discovered: ' + thingy);
+const Thingy = require("../index");
+const { parseArgs } = require("node:util");
 
-  thingy.on('disconnect', function() {
-    console.log('Disconnected!');
-  });
+const { values: cliArgs } = parseArgs({
+  options: {
+    address: { type: "string", short: "a" },
+  },
+  strict: false,
+});
 
-  thingy.connectAndSetUp(function(error) {
-    console.log('Connected! ' + ((error) ? error : ''));
-    
-    var led = {
-        r : 0,
-        g : 10,
-        b : 10
-    };
+console.log("Thingy:52 LED!");
 
-    thingy.led_set(led, function(error) {
-      console.log('LED color changed ' + ((error) ? error : ''));
-    });
-  });
+async function onDiscover(thingy) {
+  try {
+    await thingy.connect();
+    console.log("Connected!");
+
+    await thingy.ui.led.set({ r: 0, g: 10, b: 10 });
+    console.log(
+      "LED colour set to cyan! Keeping connection open... (Press Ctrl+C to exit)",
+    );
+  } catch (err) {
+    console.error("Fatal:", err.message);
+    process.exit(1);
+  }
 }
 
-Thingy.discover(onDiscover);
+if (cliArgs.address) {
+  Thingy.discoverByAddress(cliArgs.address, onDiscover);
+} else {
+  Thingy.discover(onDiscover);
+}

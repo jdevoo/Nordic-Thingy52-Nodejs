@@ -28,28 +28,43 @@
   LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
   OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
- 
-var Thingy = require('../index');
-console.log('Thingy:52 battery level service!');
 
-function onBatteryLevelChange(level) {
-    console.log('Battery level: ' + level + '%');
+const Thingy = require("../index");
+const { parseArgs } = require("node:util");
+
+const { values: cliArgs } = parseArgs({
+  options: {
+    address: { type: "string", short: "a" },
+  },
+  strict: false,
+});
+
+console.log("Thingy:52 battery level service!");
+
+async function onDiscover(thingy) {
+  try {
+    await thingy.connect();
+    console.log("Connected!");
+
+    // One-shot read
+    const level = await thingy.battery.read();
+    console.log(`Battery level: ${level}%`);
+
+    // Subscribe to level-change notifications
+    await thingy.battery.enable();
+    console.log("Battery level notifications enabled!");
+
+    for await (const lvl of thingy.battery) {
+      console.log(`Battery level: ${lvl}%`);
+    }
+  } catch (err) {
+    console.error("Fatal:", err.message);
+    process.exit(1);
+  }
 }
 
-function onDiscover(thingy) {
-  console.log('Discovered: ' + thingy);
-
-  thingy.on('disconnect', function() {
-    console.log('Disconnected!');
-  });
-
-  thingy.connectAndSetUp(function(error) {
-    console.log('Connected! ' + ((error) ? error : ''));
-    thingy.on('batteryLevelChange', onBatteryLevelChange);
-    thingy.notifyBatteryLevel(function(error) {
-      console.log('Battery Level Notifications enabled! ' + ((error) ? error : ''));
-    });
-  });
+if (cliArgs.address) {
+  Thingy.discoverByAddress(cliArgs.address, onDiscover);
+} else {
+  Thingy.discover(onDiscover);
 }
-
-Thingy.discover(onDiscover);
