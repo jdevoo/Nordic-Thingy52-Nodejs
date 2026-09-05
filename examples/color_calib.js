@@ -28,180 +28,136 @@
   LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
   OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
- 
-var Thingy = require('../index');
-var enabled;
-var this_thingy;
-var led = {
-    red   : 120,
-    green : 60,
-    blue  : 20
-};
 
-var min_intensity = 2600
-var max_intensity = 2650
+const Thingy = require("../index");
+const { parseArgs } = require("node:util");
 
-console.log('Nordic Thingy:52 color sensor calibration!');
-console.log('Place the Thingy:52 on something white, and press the button');
+const { values: cliArgs } = parseArgs({
+  options: {
+    address: { type: "string", short: "a" },
+  },
+  strict: false,
+});
 
-function onColorData(color)
-{
-    console.log('Color sensor: r ' + color.red +
-                             ' g ' + color.green +
-                             ' b ' + color.blue +
-                             ' c ' + color.clear );
+const MIN_INTENSITY = 2600;
+const MAX_INTENSITY = 2650;
 
-     let r_ratio = color.red   / (color.red + color.green + color.blue);
-     let g_ratio = color.green / (color.red + color.green + color.blue);
-     let b_ratio = color.blue  / (color.red + color.green + color.blue);
+let led = { red: 120, green: 60, blue: 20 };
 
-     var clear_at_black = 300;
-     var clear_at_white = 400;
-     var clear_diff = clear_at_white - clear_at_black;
+function clamp(v) {
+  return Math.max(0, Math.min(255, v));
+}
 
-     let clear_normalized = (color.clear - clear_at_black) / clear_diff;
-     if (clear_normalized < 0)
-     {
-         clear_normalized = 0;
-     }
+console.log("Nordic Thingy:52 colour sensor calibration!");
+console.log(
+  "Place the Thingy:52 on something white, then press the button to start.",
+);
 
-     let r_8 = r_ratio * 255.0 * 3 * clear_normalized;
-     if (r_8 > 255)
-     {
-         r_8 = 255;
-     }
-     let g_8 = g_ratio * 255.0 * 3 * clear_normalized;
-     if (g_8 > 255)
-     {
-         g_8 = 255;
-     }
-     let b_8 = b_ratio * 255.0 * 3 * clear_normalized;
-     if (b_8 > 255)
-     {
-         b_8 = 255;
-     }
-     let rgb_str = "rgb("+r_8.toFixed(0)+","+g_8.toFixed(0)+","+b_8.toFixed(0)+")";
-     console.log(rgb_str);
+async function onDiscover(thingy) {
+  try {
+    await thingy.connect();
+    console.log("Connected!");
 
-    if (color.red < min_intensity)
-    {
-        led.red = led.red + 1;
-        if (led.red > 255)
-        {
-            led.red = 255;
+    await thingy.ui.led.off();
+
+    // Initialise colour interval and reference LED in one atomic write.
+    await thingy.environment.configure((cfg) => {
+      cfg.colorInterval = 1500;
+      cfg.refLed = led;
+    });
+
+    await thingy.ui.button.enable();
+    console.log("Button enabled — press to toggle colour sensor on/off.");
+
+    let streaming = false;
+    let colorTask = null;
+
+    for await (const pressed of thingy.ui.button) {
+      if (!pressed) continue;
+
+      if (streaming) {
+        // Stop: disable stream → terminates the background IIFE's for-await.
+        streaming = false;
+        await thingy.environment.color.disable();
+        if (colorTask) {
+          await colorTask;
+          colorTask = null;
         }
-    }
-    else if (color.red > max_intensity)
-    {
-        led.red = led.red - 1;
-        if (led.red < 0)
-        {
-            led.red = 0;
-        }
-    }
+        console.log("Colour sensor stopped!");
+      } else {
+        // Start: enable stream → kick off background calibration loop.
+        streaming = true;
+        await thingy.environment.color.enable();
+        console.log("Colour sensor started!");
 
-    if (color.green < min_intensity)
-    {
-        led.green = led.green + 1;
-        if (led.green > 255)
-        {
-            led.green = 255;
-        }
-    }
-    else if (color.green > max_intensity)
-    {
-        led.green = led.green - 1;
-        if (led.green < 0)
-        {
-            led.green = 0;
-        }
-    }
+        colorTask = (async () => {
+          for await (const color of thingy.environment.color) {
+            console.log(
+              `Color: r${color.red} g${color.green} b${color.blue} c${color.clear}`,
+            );
 
-    if (color.blue < min_intensity)
-    {
-        led.blue = led.blue + 1;
-        if (led.blue > 255)
-        {
-            led.blue = 255;
-        }
-    }
-    else if (color.blue > max_intensity)
-    {
-        led.blue = led.blue - 1;
-        if (led.blue < 0)
-        {
-            led.blue = 0;
-        }
-    }
-    console.log('Led config: r ' + led.red +
-                           ' g ' + led.green +
-                           ' b ' + led.blue );
-
-    setTimeout(function(){
-        this_thingy.color_ref_led_set(led, function(error) {
-            if (error) {
-                console.log('Color sensor configure! ' + error);
+            // Compute normalised 8-bit RGB for display
+            const sum = color.red + color.green + color.blue;
+            if (sum > 0) {
+              const norm = Math.max(0, (color.clear - 300) / 100);
+              const r8 = Math.min(255, (color.red / sum) * 255 * 3 * norm);
+              const g8 = Math.min(255, (color.green / sum) * 255 * 3 * norm);
+              const b8 = Math.min(255, (color.blue / sum) * 255 * 3 * norm);
+              console.log(
+                `rgb(${r8.toFixed(0)},${g8.toFixed(0)},${b8.toFixed(0)})`,
+              );
             }
-        });
-    }, 20);
-}
 
-function onButtonChange(state) {
-    if (state == 'Pressed') {
-        if (enabled) {
-            enabled = false;
-            this.color_disable(function(error) {
-                console.log('Color sensor stopped! ' + ((error) ? error : ''));
-            });
-        }
-        else {
-            enabled = true;
-            this.color_enable(function(error) {
-                console.log('Color sensor started! ' + ((error) ? error : ''));
-            });
-        }
+            // Closed-loop: nudge the reference LED to bring each channel into
+            // [MIN_INTENSITY, MAX_INTENSITY].
+            const newLed = {
+              red:
+                color.red < MIN_INTENSITY
+                  ? clamp(led.red + 1)
+                  : color.red > MAX_INTENSITY
+                    ? clamp(led.red - 1)
+                    : led.red,
+              green:
+                color.green < MIN_INTENSITY
+                  ? clamp(led.green + 1)
+                  : color.green > MAX_INTENSITY
+                    ? clamp(led.green - 1)
+                    : led.green,
+              blue:
+                color.blue < MIN_INTENSITY
+                  ? clamp(led.blue + 1)
+                  : color.blue > MAX_INTENSITY
+                    ? clamp(led.blue - 1)
+                    : led.blue,
+            };
+
+            if (
+              newLed.red !== led.red ||
+              newLed.green !== led.green ||
+              newLed.blue !== led.blue
+            ) {
+              led = newLed;
+              console.log(`Led config: r${led.red} g${led.green} b${led.blue}`);
+              // The configure() queue serialises this write against any other
+              // pending config operations.
+              await thingy.environment
+                .configure((cfg) => {
+                  cfg.refLed = led;
+                })
+                .catch(console.error);
+            }
+          }
+        })();
+      }
     }
+  } catch (err) {
+    console.error("Fatal:", err.message);
+    process.exit(1);
+  }
 }
 
-function onDiscover(thingy) {
-    this_thingy = thingy;
-  console.log('Discovered: ' + thingy);
-
-  thingy.on('disconnect', function() {
-    console.log('Disconnected!');
-  });
-
-  thingy.connectAndSetUp(function(error) {
-    console.log('Connected! ' + error ? error : '');
-
-    thingy.on('colorNotif', onColorData);
-    thingy.on('buttonNotif', onButtonChange);
-
-    thingy.led_off(function(error) {
-        if (error) {
-            console.log('Lightwell led off ' + error);
-        }
-    });
-
-    thingy.color_interval_set(1500, function(error) {
-        if (error) {
-            console.log('Color sensor configure interval! ' + error);
-        }
-    });
-
-    thingy.color_ref_led_set(led, function(error) {
-        if (error) {
-            console.log('Color sensor configure led! ' + error);
-        }
-    });
-
-    thingy.button_enable(function(error) {
-        console.log('Button started! ' + ((error) ? error : ''));
-    });
-
-    enabled = false;
-
-  });
+if (cliArgs.address) {
+  Thingy.discoverByAddress(cliArgs.address, onDiscover);
+} else {
+  Thingy.discover(onDiscover);
 }
-
-Thingy.discover(onDiscover);

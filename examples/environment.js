@@ -28,140 +28,106 @@
   LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
   OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
- 
-var Thingy = require('../index');
-var enabled;
 
-console.log('Reading Thingy environment sensors!');
+const Thingy = require("../index");
+const { GasMode } = require("../index");
+const { parseArgs } = require("node:util");
 
-function onTemperatureData(temperature) {
-    console.log('Temperature sensor: ' + temperature);
-}
+const { values: cliArgs } = parseArgs({
+  options: {
+    address: { type: "string", short: "a" },
+  },
+  strict: false,
+});
 
-function onPressureData(pressure) {
-    console.log('Pressure sensor: ' + pressure);
-}
+console.log("Reading Thingy environment sensors!");
+console.log("Press the button to toggle all sensors on/off.");
 
-function onHumidityData(humidity) {
-    console.log('Humidity sensor: ' + humidity);
-}
+async function onDiscover(thingy) {
+  try {
+    await thingy.connect();
+    console.log("Connected!");
 
-function onGasData(gas) {
-    console.log('Gas sensor: eCO2 ' + gas.eco2 + ' - TVOC ' + gas.tvoc );
-}
+    // Single atomic read-modify-write — no lost-update race.
+    await thingy.environment.configure((cfg) => {
+      cfg.temperatureInterval = 1000;
+      cfg.pressureInterval = 1000;
+      cfg.humidityInterval = 1000;
+      cfg.colorInterval = 1000;
+      cfg.gasMode = GasMode.EVERY_1S;
+    });
+    console.log("Environment configured!");
 
-function onColorData(color) {
-    console.log('Color sensor: r ' + color.red +
-                             ' g ' + color.green +
-                             ' b ' + color.blue +
-                             ' c ' + color.clear );
-}
+    // Gather all sensor streams into an array so we can enable/disable them together.
+    const sensors = [
+      thingy.environment.temperature,
+      thingy.environment.pressure,
+      thingy.environment.humidity,
+      thingy.environment.color,
+      thingy.environment.gas,
+    ];
 
-function onButtonChange(state) {
-    if (state == 'Pressed') {
-        if (enabled) {
-            enabled = false;
-            this.temperature_disable(function(error) {
-                console.log('Temperature sensor stopped! ' + ((error) ? error : ''));
-            });
-            this.pressure_disable(function(error) {
-                console.log('Pressure sensor stopped! ' + ((error) ? error : ''));
-            });
-            this.humidity_disable(function(error) {
-                console.log('Humidity sensor stopped! ' + ((error) ? error : ''));
-            });
-            this.color_disable(function(error) {
-                console.log('Color sensor stopped! ' + ((error) ? error : ''));
-            });
-            this.gas_disable(function(error) {
-                console.log('Gas sensor stopped! ' + ((error) ? error : ''));
-            });
+    /**
+     * Runs a sensor in a background task.
+     * The for-await loop exits automatically when the stream is disabled.
+     */
+    function startStream(sensor, handler) {
+      (async () => {
+        for await (const val of sensor) {
+          handler(val);
         }
-        else {
-            enabled = true;
-            this.temperature_enable(function(error) {
-                console.log('Temperature sensor started! ' + ((error) ? error : ''));
-            });
-            this.pressure_enable(function(error) {
-                console.log('Pressure sensor started! ' + ((error) ? error : ''));
-            });
-            this.humidity_enable(function(error) {
-                console.log('Humidity sensor started! ' + ((error) ? error : ''));
-            });
-            this.color_enable(function(error) {
-                console.log('Color sensor started! ' + ((error) ? error : ''));
-            });
-            this.gas_enable(function(error) {
-                console.log('Gas sensor started! ' + ((error) ? error : ''));
-            });
-        }
+      })();
     }
+
+    async function startAll() {
+      await Promise.all(sensors.map((s) => s.enable()));
+      startStream(thingy.environment.temperature, (t) =>
+        console.log(`Temperature: ${t} °C`),
+      );
+      startStream(thingy.environment.pressure, (p) =>
+        console.log(`Pressure: ${p} Pa`),
+      );
+      startStream(thingy.environment.humidity, (h) =>
+        console.log(`Humidity: ${h} %`),
+      );
+      startStream(thingy.environment.color, (c) =>
+        console.log(`Color: r${c.red} g${c.green} b${c.blue} c${c.clear}`),
+      );
+      startStream(thingy.environment.gas, (g) =>
+        console.log(`Gas: eCO₂ ${g.eco2} ppm  TVOC ${g.tvoc} ppb`),
+      );
+      console.log("Environment sensors started!");
+    }
+
+    async function stopAll() {
+      await Promise.all(sensors.map((s) => s.disable()));
+      console.log("Environment sensors stopped!");
+    }
+
+    await startAll();
+
+    let streaming = true;
+    await thingy.ui.button.enable();
+
+    // Button drives the toggle; the for-await exits when the device disconnects.
+    for await (const pressed of thingy.ui.button) {
+      if (!pressed) continue;
+      if (streaming) {
+        streaming = false;
+        await stopAll();
+      } else {
+        streaming = true;
+        await startAll(); // new background IIFEs start here
+      }
+    }
+  } catch (err) {
+    console.error("Fatal:", err.message);
+    process.exit(1);
+  }
 }
 
-function onDiscover(thingy) {
-  console.log('Discovered: ' + thingy);
-
-  thingy.on('disconnect', function() {
-    console.log('Disconnected!');
-  });
-
-  thingy.connectAndSetUp(function(error) {
-    console.log('Connected! ' + error ? error : '');
-
-    thingy.on('temperatureNotif', onTemperatureData);
-    thingy.on('pressureNotif', onPressureData);
-    thingy.on('humidityNotif', onHumidityData);
-    thingy.on('gasNotif', onGasData);
-    thingy.on('colorNotif', onColorData);
-    thingy.on('buttonNotif', onButtonChange);
-
-    thingy.temperature_interval_set(1000, function(error) {
-        if (error) {
-            console.log('Temperature sensor configure! ' + error);
-        }
-    });
-    thingy.pressure_interval_set(1000, function(error) {
-        if (error) {
-            console.log('Pressure sensor configure! ' + error);
-        }
-    });
-    thingy.humidity_interval_set(1000, function(error) {
-        if (error) {
-            console.log('Humidity sensor configure! ' + error);
-        }
-    });
-    thingy.color_interval_set(1000, function(error) {
-        if (error) {
-            console.log('Color sensor configure! ' + error);
-        }
-    });
-    thingy.gas_mode_set(1, function(error) {
-        if (error) {
-            console.log('Gas sensor configure! ' + error);
-        }
-    });
-
-    enabled = true;
-
-    thingy.temperature_enable(function(error) {
-        console.log('Temperature sensor started! ' + ((error) ? error : ''));
-    });
-    thingy.pressure_enable(function(error) {
-        console.log('Pressure sensor started! ' + ((error) ? error : ''));
-    });
-    thingy.humidity_enable(function(error) {
-        console.log('Humidity sensor started! ' + ((error) ? error : ''));
-    });
-    thingy.color_enable(function(error) {
-        console.log('Color sensor started! ' + ((error) ? error : ''));
-    });
-    thingy.gas_enable(function(error) {
-        console.log('Gas sensor started! ' + ((error) ? error : ''));
-    });
-    thingy.button_enable(function(error) {
-        console.log('Button started! ' + ((error) ? error : ''));
-    });
-  });
+if (cliArgs.address) {
+  Thingy.discoverByAddress(cliArgs.address, onDiscover);
+} else {
+  Thingy.discover(onDiscover);
 }
-
-Thingy.discover(onDiscover);

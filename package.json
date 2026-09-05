@@ -1,17 +1,56 @@
 {
   "name": "thingy52",
-  "version": "1.0.4",
-  "description": "Nordic Thingy:52 Node.js library example. Please see http://www.nordicsemi.com/thingy for the latest Nordic Thingy:52 news and software releases.",
+  "version": "3.0.0",
+  "description": "Nordic Thingy:52 Node.js library — async-iterable BLE wrapper for the Thingy:52 GATT profile.",
   "main": "index.js",
+  "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "require": "./index.js",
+      "types": "./index.d.ts"
+    },
+    "./codec": {
+      "require": "./lib/codec.js",
+      "types": "./lib/codec.d.ts"
+    },
+    "./enums": {
+      "require": "./lib/enums.js",
+      "types": "./lib/enums.d.ts"
+    }
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "lib/",
+    "README.md",
+    "LICENSE.md"
+  ],
   "directories": {
-    "example": "examples"
+    "example": "examples",
+    "test": "test"
   },
   "dependencies": {
     "noble-device": "^1.4.1"
   },
-  "devDependencies": {},
+  "overrides": {
+    "noble": "npm:@abandonware/noble@^1.9.2-26",
+    "tar": "^7.5.22"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "eslint": "^9.0.0",
+    "globals": "^15.0.0",
+    "prettier": "^3.0.0"
+  },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "repository": {
     "type": "git",
@@ -19,24 +58,21 @@
   },
   "keywords": [
     "Bluetooth",
-    "Thingy:52",
+    "BLE",
+    "Thingy52",
+    "Nordic",
     "Sensors",
     "Temperature",
-    "Humididty",
+    "Humidity",
     "Pressure",
     "Motion",
     "Speaker",
-    "Microphone",
-    "Color",
-    "Light",
-    "Gas",
-    "Air",
-    "Quality"
+    "Microphone"
   ],
   "author": "Nordic Semiconductor ASA",
   "license": "SEE LICENSE IN LICENSE.md",
   "bugs": {
     "url": "https://github.com/NordicPlayground/Nordic-Thingy52-Nodejs/issues"
   },
-  "homepage": "http://www.nordicsemi.com/eng/Products/Nordic-Thingy-52"
+  "homepage": "https://www.nordicsemi.com/Products/Nordic-Thingy-52"
 }

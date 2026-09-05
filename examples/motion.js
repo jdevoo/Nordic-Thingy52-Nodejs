@@ -28,174 +28,127 @@
   LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
   OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
- 
-var Thingy = require('../index');
-require('console.table');
-var enabled;
 
-console.log('Reading Thingy Motion sensors!');
+const Thingy = require("../index");
+const { Direction, Orientation } = require("../index");
+const { parseArgs } = require("node:util");
 
-var Direction = Object.freeze([
-    'UNDEFINED',
-    'TAP_X_UP', 'TAP_X_DOWN',
-    'TAP_Y_UP', 'TAP_Y_DOWN',
-    'TAP_Z_UP', 'TAP_Z_DOWN'
-]);
+const { values: cliArgs } = parseArgs({
+  options: {
+    address: { type: "string", short: "a" },
+  },
+  strict: false,
+});
 
-var Orientation = Object.freeze([
-    'Portrait', 'Landscape', 'Reverse portrait', 'Reverse landscape'
-]);
+console.log("Reading Thingy Motion sensors!");
+console.log("Press the button to toggle all sensors on/off.");
 
-function onTapData(tap) {
-    console.log('Tap data: Dir: %s (%d), Count: %d', 
-                        Direction[tap.direction], tap.direction, tap.count);
-}
+async function onDiscover(thingy) {
+  try {
+    await thingy.connect();
+    console.log("Connected!");
 
-function onOrientationData(orientation) {
-    console.log('Orientation data: %s (%d)', Orientation[orientation], orientation);
-}
+    await thingy.motion.configure((cfg) => {
+      cfg.motionProcessingFrequency = 5; // Hz
+    });
+    console.log("Motion processing frequency set to 5 Hz!");
 
-function onQuaternionData(quaternion) {
-    console.log('Quaternion data: w: %d, x: %d, y: %d, z: %d', 
-        quaternion.w, quaternion.x, quaternion.y, quaternion.z);
-}
+    const sensors = [
+      thingy.motion.tap,
+      thingy.motion.orientation,
+      thingy.motion.quaternion,
+      thingy.motion.stepCounter,
+      thingy.motion.rawMotion,
+      thingy.motion.euler,
+      thingy.motion.rotation,
+      thingy.motion.heading,
+      thingy.motion.gravity,
+    ];
 
-function onStepCounterData(stepCounter) {
-    console.log('Step Counter data: Steps: %d, Time[ms]: %d', 
-        stepCounter.steps, stepCounter.time);
-}
-
-function onRawData(raw_data) {
-    console.log('Raw data: Accelerometer: x %d, y %d, z %d', 
-        raw_data.accelerometer.x, raw_data.accelerometer.y, raw_data.accelerometer.z);
-    console.log('Raw data: Gyroscope: x %d, y %d, z %d', 
-        raw_data.gyroscope.x, raw_data.gyroscope.y, raw_data.gyroscope.z);
-    console.log('Raw data: Compass: x %d, y %d, z %d', 
-        raw_data.compass.x, raw_data.compass.y, raw_data.compass.z);
-}
-
-function onEulerData(euler) {
-    console.log('Euler angles: roll %d, pitch %d, yaw %d', 
-        euler.roll, euler.pitch, euler.yaw);
-}
-
-function onRotationData(rotation) {
-    console.log('Rotation: matrix:');
-
-    console.table(rotation);
-}
-
-function onHeadingData(heading) {
-    console.log('Heading: %d', heading);
-}
-
-function onGravityData(gravity) {
-    console.log('Gravity: x: %d, y %d, z %d', gravity.x, gravity.y, gravity.z);
-}
-
-function onButtonChange(state) {
-    if (state == 'Pressed') {
-        if (enabled) {
-            enabled = false;
-            this.tap_disable(function(error) {
-                console.log('Tap sensor stopped! ' + ((error) ? error : ''));
-            });
-            this.orientation_disable(function(error) {
-                console.log('Orientation sensor stopped! ' + ((error) ? error : ''));
-            });
-            this.quaternion_disable(function(error) {
-                console.log('Quaternion sensor stopped! ' + ((error) ? error : ''));
-            });
-            this.stepCounter_disable(function(error) {
-                console.log('Step Counter sensor stopped! ' + ((error) ? error : ''));
-            });
-            this.raw_disable(function(error) {
-                console.log('Raw sensor stopped! ' + ((error) ? error : ''));
-            });
-            this.euler_disable(function(error) {
-                console.log('Euler sensor stopped! ' + ((error) ? error : ''));
-            });
-            this.rotation_disable(function(error) {
-                console.log('Rotation sensor stopped! ' + ((error) ? error : ''));
-            });
-            this.heading_disable(function(error) {
-                console.log('Heading sensor stopped! ' + ((error) ? error : ''));
-            });
-            this.gravity_disable(function(error) {
-                console.log('Gravity sensor stopped! ' + ((error) ? error : ''));
-            });
+    function startStream(sensor, handler) {
+      (async () => {
+        for await (const val of sensor) {
+          handler(val);
         }
-        else {
-            enabled = true;
-            this.tap_enable(function(error) {
-                console.log('Tap sensor started! ' + ((error) ? error : ''));
-            });
-            this.orientation_enable(function(error) {
-                console.log('Orientation sensor started! ' + ((error) ? error : ''));
-            });
-            this.quaternion_enable(function(error) {
-                console.log('Quaternion sensor started! ' + ((error) ? error : ''));
-            });
-            this.stepCounter_enable(function(error) {
-                console.log('Step Counter sensor started! ' + ((error) ? error : ''));
-            });
-            this.raw_enable(function(error) {
-                console.log('Raw sensor started! ' + ((error) ? error : ''));
-            });
-            this.euler_enable(function(error) {
-                console.log('Euler sensor started! ' + ((error) ? error : ''));
-            });
-            this.rotation_enable(function(error) {
-                console.log('Rotation sensor started! ' + ((error) ? error : ''));
-            });
-            this.heading_enable(function(error) {
-                console.log('Heading sensor started! ' + ((error) ? error : ''));
-            });
-            this.gravity_enable(function(error) {
-                console.log('Gravity sensor started! ' + ((error) ? error : ''));
-            });
-        }
+      })();
     }
+
+    async function startAll() {
+      for (const sensor of sensors) {
+        await sensor.enable();
+      }
+      startStream(thingy.motion.tap, (tap) =>
+        console.log(
+          `Tap: direction ${Direction[tap.direction]} (${tap.direction}), count ${tap.count}`,
+        ),
+      );
+      startStream(thingy.motion.orientation, (o) =>
+        console.log(`Orientation: ${Orientation[o]} (${o})`),
+      );
+      startStream(thingy.motion.quaternion, (q) =>
+        console.log(
+          `Quaternion: w ${q.w.toFixed(4)} x ${q.x.toFixed(4)} y ${q.y.toFixed(4)} z ${q.z.toFixed(4)}`,
+        ),
+      );
+      startStream(thingy.motion.stepCounter, (sc) =>
+        console.log(`Step Counter: ${sc.steps} steps, ${sc.time} ms`),
+      );
+      startStream(thingy.motion.rawMotion, (r) =>
+        console.log(
+          `Accelerometer: x ${r.accelerometer.x.toFixed(3)} y ${r.accelerometer.y.toFixed(3)} z ${r.accelerometer.z.toFixed(3)}  ` +
+            `Gyroscope: x ${r.gyroscope.x.toFixed(3)} y ${r.gyroscope.y.toFixed(3)} z ${r.gyroscope.z.toFixed(3)}`,
+        ),
+      );
+      startStream(thingy.motion.euler, (e) =>
+        console.log(
+          `Euler: roll ${e.roll.toFixed(2)} pitch ${e.pitch.toFixed(2)} yaw ${e.yaw.toFixed(2)}`,
+        ),
+      );
+      startStream(thingy.motion.rotation, (m) => {
+        console.log("Rotation matrix:");
+        console.table(m);
+      });
+      startStream(thingy.motion.heading, (h) =>
+        console.log(`Heading: ${h.toFixed(2)}`),
+      );
+      startStream(thingy.motion.gravity, (g) =>
+        console.log(
+          `Gravity: x ${g.x.toFixed(3)} y ${g.y.toFixed(3)} z ${g.z.toFixed(3)}`,
+        ),
+      );
+      console.log("Motion sensors started!");
+    }
+
+    async function stopAll() {
+      for (const sensor of sensors) {
+        await sensor.disable();
+      }
+      console.log("Motion sensors stopped!");
+    }
+
+    await startAll();
+
+    let streaming = true;
+    await thingy.ui.button.enable();
+
+    for await (const pressed of thingy.ui.button) {
+      if (!pressed) continue;
+      if (streaming) {
+        streaming = false;
+        await stopAll();
+      } else {
+        streaming = true;
+        await startAll();
+      }
+    }
+  } catch (err) {
+    console.error("Fatal:", err.message);
+    process.exit(1);
+  }
 }
 
-function onDiscover(thingy) {
-  console.log('Discovered: ' + thingy);
-
-  thingy.on('disconnect', function() {
-    console.log('Disconnected!');
-  });
-
-  thingy.connectAndSetUp(function(error) {
-    console.log('Connected! ' + error ? error : '');
-
-    thingy.on('tapNotif', onTapData);
-    thingy.on('orientationNotif', onOrientationData);
-    thingy.on('quaternionNotif', onQuaternionData);
-    thingy.on('stepCounterNotif', onStepCounterData);
-    thingy.on('rawNotif', onRawData);
-    thingy.on('eulerNotif', onEulerData);
-    thingy.on('rotationNotif', onRotationData);
-    thingy.on('headingNotif', onHeadingData);
-    thingy.on('gravityNotif', onGravityData);
-    thingy.on('buttonNotif', onButtonChange);
-
-    thingy.motion_processing_freq_set(5, function(error) {
-        if (error) {
-            console.log('Motion freq set configure failed! ' + error);
-        }
-    });    
-
-    enabled = true;
-    thingy.orientation_enable(function(error) {
-        console.log('Orientation sensor started! ' + ((error) ? error : ''));
-    });
-    thingy.rotation_enable(function(error) {
-        console.log('Rotation sensor started! ' + ((error) ? error : ''));
-    });
-    thingy.button_enable(function(error) {
-        console.log('Button started! ' + ((error) ? error : ''));
-    });
-  });
+if (cliArgs.address) {
+  Thingy.discoverByAddress(cliArgs.address, onDiscover);
+} else {
+  Thingy.discover(onDiscover);
 }
-
-Thingy.discover(onDiscover);

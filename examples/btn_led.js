@@ -28,47 +28,53 @@
   LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
   OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
- 
-var Thingy = require('../index');
-var led_color = 1;
-console.log('Button and LED!');
 
-function onButtonChange(state) {
-    console.log('Button: ' + state);
+const Thingy = require("../index");
+const { parseArgs } = require("node:util");
 
-    if (state == 'Pressed')
-    {
-        led_color = (led_color + 1) % 8;
-        if (led_color == 0)
-        {
-            led_color = 1;
-        }
+const { values: cliArgs } = parseArgs({
+  options: {
+    address: { type: "string", short: "a" },
+  },
+  strict: false,
+});
 
-        var led = {
-            color : led_color,
-            intensity : 20,
-            delay : 1000
-        };
-        this.led_breathe(led, function(error){
-            console.log('LED color change: ' + error);
-        });
+console.log("Button and LED!");
+console.log(
+  "Each button press cycles through the LED breathe colour palette (1–7).",
+);
+
+async function onDiscover(thingy) {
+  try {
+    await thingy.connect();
+    console.log("Connected!");
+
+    let colorIndex = 1;
+
+    await thingy.ui.button.enable();
+    console.log("Button enabled!");
+
+    for await (const pressed of thingy.ui.button) {
+      console.log("Button: " + (pressed ? "Pressed" : "Released"));
+      if (!pressed) continue;
+
+      // Cycle colours 1–7 (LedColor.RED through LedColor.WHITE)
+      colorIndex = (colorIndex % 7) + 1;
+      await thingy.ui.led.breathe({
+        color: colorIndex,
+        intensity: 20,
+        delay: 1000,
+      });
+      console.log("LED colour: " + colorIndex);
     }
+  } catch (err) {
+    console.error("Fatal:", err.message);
+    process.exit(1);
+  }
 }
 
-function onDiscover(thingy) {
-  console.log('Discovered: ' + thingy);
-
-  thingy.on('disconnect', function() {
-    console.log('Disconnected!');
-  });
-
-  thingy.connectAndSetUp(function(error) {
-    console.log('Connected! ' + error);
-    thingy.on('buttonNotif', onButtonChange);
-    thingy.button_enable(function(error) {
-      console.log('Button enabled! ' + error);
-    });
-  });
+if (cliArgs.address) {
+  Thingy.discoverByAddress(cliArgs.address, onDiscover);
+} else {
+  Thingy.discover(onDiscover);
 }
-
-Thingy.discover(onDiscover);
